@@ -17,6 +17,7 @@ const FIELDS = [
 
 const REQUIRED = ["company","industry","tier","stage","renewalDate","stakeholders","goals"];
 const ICONS = ["🚀","❤️","📊","🚨","📈","🎯","📋"];
+const EMPTY_FORM = { company:"",industry:"",tier:"",arr:"",stage:"",renewalDate:"",stakeholders:"",goals:"",painPoints:"",notes:"" };
 
 function buildPlaybookPrompt(f) {
   return `You are a senior CSM with deep expertise in payments, AR automation, and utility tech. Generate a practical, account-specific CS playbook. Be direct and actionable — no generic filler.
@@ -74,8 +75,6 @@ function parsePlaybook(text) {
 
 function calcHealth(f) {
   let score = 0, bd = [];
-
-  // Stage (0-28)
   const sn = f.stage.toLowerCase();
   let ss = 14;
   if (sn.includes("adopt")||sn.includes("expan")) ss=28;
@@ -85,7 +84,6 @@ function calcHealth(f) {
   score += ss;
   bd.push({ label:"Account Stage", score:ss, max:28, note:f.stage });
 
-  // Risk signals (0-25)
   const rw = ["churn","cancel","unhappy","leaving","delayed","low adoption","no adoption","integration issue","escalat","dissatisf","not using","behind","churning"];
   const rt = (f.painPoints+" "+f.notes).toLowerCase();
   const hits = rw.filter(w=>rt.includes(w)).length;
@@ -93,7 +91,6 @@ function calcHealth(f) {
   score += rs;
   bd.push({ label:"Risk Signals", score:rs, max:25, note:hits===0?"No major flags detected":`${hits} risk signal(s) detected` });
 
-  // Renewal proximity (0-20)
   let rns = 12;
   const now = new Date();
   const qm = f.renewalDate.toLowerCase().match(/q([1-4])\s*(\d{4})?/);
@@ -109,7 +106,6 @@ function calcHealth(f) {
   score += rns;
   bd.push({ label:"Renewal Proximity", score:rns, max:20, note:f.renewalDate });
 
-  // Stakeholders (0-15)
   const st=f.stakeholders.toLowerCase();
   const hasChamp = st.includes("champion")||st.includes("advocate")||st.includes("sponsor");
   const hasExec = /cfo|ceo|cto|vp |director|president|exec/i.test(st);
@@ -118,7 +114,6 @@ function calcHealth(f) {
   score += ss2;
   bd.push({ label:"Stakeholder Coverage", score:ss2, max:15, note:hasChamp?"Champion identified":hasExec?"Exec contact present":"Expand stakeholder map" });
 
-  // Goals clarity (0-12)
   const gs = f.goals.length>100?12:f.goals.length>60?8:f.goals.length>20?5:2;
   score += gs;
   bd.push({ label:"Goals Clarity", score:gs, max:12, note:f.goals.length>100?"Well-defined criteria":"Add more specificity" });
@@ -130,8 +125,8 @@ function calcHealth(f) {
 }
 
 async function callClaude(prompt) {
-  const res = await fetch("https://api.anthropic.com/v1/messages", {
-    method:"POST", headers:{"Content-Type":"application/json"},
+  const res = await fetch('/api/generate', {
+    method:'POST', headers:{"Content-Type":"application/json"},
     body: JSON.stringify({ model:"claude-sonnet-4-20250514", max_tokens:1000, messages:[{role:"user",content:prompt}] })
   });
   const data = await res.json();
@@ -156,7 +151,7 @@ function downloadBlob(content, filename, type="text/plain") {
 const T = { PRIORITY:"priority", HEALTH:"health", TEMPLATES:"templates" };
 
 export default function App() {
-  const [form, setForm] = useState({ company:"",industry:"",tier:"",arr:"",stage:"",renewalDate:"",stakeholders:"",goals:"",painPoints:"",notes:"" });
+  const [form, setForm] = useState({...EMPTY_FORM});
   const [playbook, setPlaybook] = useState(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
@@ -168,9 +163,11 @@ export default function App() {
   const [copied, setCopied] = useState("");
 
   const canGen = REQUIRED.every(k=>form[k].trim());
+  const hasAnyValue = Object.values(form).some(v=>v.trim());
   const health = playbook ? calcHealth(form) : null;
 
   const set = (k,v) => setForm(f=>({...f,[k]:v}));
+  const clearForm = () => setForm({...EMPTY_FORM});
 
   const generate = async () => {
     setLoading(true); setError(""); setPlaybook(null); setTemplates(null);
@@ -189,18 +186,22 @@ export default function App() {
     try {
       const text = await callClaude(buildTemplatesPrompt(form, playbook.sections));
       const clean = text.replace(/```json|```/g,"").trim();
-      setTemplates(JSON.parse(clean).templates);
+      const jsonStart = clean.indexOf("{");
+      const jsonEnd = clean.lastIndexOf("}");
+      if (jsonStart===-1||jsonEnd===-1) throw new Error("No JSON found");
+      const parsed = JSON.parse(clean.slice(jsonStart, jsonEnd+1));
+      if (!parsed.templates||!Array.isArray(parsed.templates)) throw new Error("Unexpected structure");
+      setTemplates(parsed.templates);
     } catch { setTmplError("Failed to generate templates. Please try again."); }
     setTmplLoading(false);
   };
 
   const copy = (text, key) => { navigator.clipboard.writeText(text); setCopied(key); setTimeout(()=>setCopied(""),2000); };
-
   const download = (fmt) => {
     const txt = buildExportText(form, playbook, health);
     if (fmt==="txt") { downloadBlob(txt, `${form.company.replace(/\s+/g,"-")}-playbook.txt`); return; }
     const w = window.open("","_blank");
-    w.document.write(`<!DOCTYPE html><html><head><title>${form.company} Playbook</title><style>body{font-family:sans-serif;padding:32px;max-width:800px;margin:0 auto;color:#1a2332}h1{color:#1e3a5f}pre{white-space:pre-wrap;line-height:1.7;font-family:inherit;font-size:14px}</style></head><body><pre>${txt}</pre></body></html>`);
+    w.document.write(`<!DOCTYPE html><html><head><title>${form.company} Playbook</title><style>body{font-family:sans-serif;padding:32px;max-width:800px;margin:0 auto;color:#1a2332}pre{white-space:pre-wrap;line-height:1.7;font-family:inherit;font-size:14px}</style></head><body><pre>${txt}</pre></body></html>`);
     w.document.close(); setTimeout(()=>w.print(),400);
   };
 
@@ -211,7 +212,7 @@ export default function App() {
         <div style={{maxWidth:860,margin:"0 auto"}}>
           <div style={{fontSize:11,letterSpacing:2,textTransform:"uppercase",opacity:0.65,marginBottom:6}}>Customer Success</div>
           <h1 style={{margin:0,fontSize:26,fontWeight:700}}>Account Playbook Generator</h1>
-          <p style={{margin:"8px 0 0",opacity:0.8,fontSize:13}}>Fill in account details → get a tailored playbook with health scoring and email templates.</p>
+          <p style={{margin:"8px 0 0",opacity:0.8,fontSize:13}}>Fill in account details to get a tailored playbook with health scoring and email templates.</p>
         </div>
       </div>
       <div style={{maxWidth:860,margin:"0 auto",padding:"28px 20px"}}>
@@ -233,6 +234,12 @@ export default function App() {
           {error&&<div style={{marginTop:16,padding:"11px 16px",background:"#fff3f0",border:"1px solid #f5c6bb",borderRadius:8,color:"#c0392b",fontSize:13}}>{error}</div>}
           <div style={{marginTop:22,display:"flex",justifyContent:"flex-end",alignItems:"center",gap:12}}>
             {!canGen&&<span style={{fontSize:12,color:"#9aacbc"}}>* Complete required fields</span>}
+            {hasAnyValue&&(
+              <button onClick={clearForm}
+                style={{background:"#fff",border:"1.5px solid #d0dce8",borderRadius:8,padding:"12px 20px",fontSize:14,fontWeight:600,cursor:"pointer",color:"#6b829e"}}>
+                Clear Fields
+              </button>
+            )}
             <button onClick={generate} disabled={!canGen||loading}
               style={{background:canGen&&!loading?`linear-gradient(135deg,${NAV},${ACCENT})`:"#aabdd4",color:"#fff",border:"none",borderRadius:8,padding:"12px 30px",fontSize:14,fontWeight:600,cursor:canGen&&!loading?"pointer":"not-allowed",letterSpacing:0.2}}>
               {loading?"Generating Playbook…":"Generate Playbook →"}
@@ -252,7 +259,6 @@ export default function App() {
   ];
 
   const renderContent = () => {
-    // HEALTH
     if (tab===T.HEALTH) return (
       <div>
         <div style={{display:"flex",gap:28,marginBottom:24,flexWrap:"wrap",alignItems:"flex-start"}}>
@@ -293,7 +299,6 @@ export default function App() {
       </div>
     );
 
-    // TEMPLATES
     if (tab===T.TEMPLATES) {
       if (tmplLoading) return <div style={{textAlign:"center",padding:"48px 0",color:"#6b829e",fontSize:14}}>Generating templates for {form.company}…</div>;
       if (tmplError) return <div style={{padding:"14px 18px",background:"#fff3f0",borderRadius:8,color:"#c0392b",fontSize:13}}>{tmplError} <button onClick={()=>{setTmplError("");loadTemplates();}} style={{marginLeft:10,color:"#c0392b",fontWeight:600,background:"none",border:"none",cursor:"pointer",textDecoration:"underline"}}>Retry</button></div>;
@@ -327,7 +332,6 @@ export default function App() {
       );
     }
 
-    // PRIORITY
     if (tab===T.PRIORITY) return (
       <div>
         <h2 style={{margin:"0 0 18px",fontSize:18,color:"#e05c2a"}}>⚡ CSM Priority Actions This Quarter</h2>
@@ -339,7 +343,6 @@ export default function App() {
       </div>
     );
 
-    // SECTION
     const sec = playbook.sections[tab];
     if (!sec) return null;
     return (
@@ -367,9 +370,7 @@ export default function App() {
           <h1 style={{margin:0,fontSize:24,fontWeight:700}}>Account Playbook Generator</h1>
         </div>
       </div>
-
       <div style={{maxWidth:900,margin:"0 auto",padding:"22px 20px"}}>
-        {/* Account bar */}
         <div style={{background:"#fff",borderRadius:12,padding:"14px 22px",marginBottom:16,boxShadow:"0 2px 8px rgba(0,0,0,0.06)",display:"flex",justifyContent:"space-between",alignItems:"center",flexWrap:"wrap",gap:10}}>
           <div>
             <div style={{fontSize:17,fontWeight:700}}>{form.company}</div>
@@ -384,31 +385,24 @@ export default function App() {
             )}
             <button onClick={()=>download("txt")} style={{background:"#f0f4f8",border:"1.5px solid #d0dce8",borderRadius:8,padding:"6px 13px",fontSize:12,fontWeight:600,cursor:"pointer",color:NAV}}>⬇ TXT</button>
             <button onClick={()=>download("pdf")} style={{background:"#f0f4f8",border:"1.5px solid #d0dce8",borderRadius:8,padding:"6px 13px",fontSize:12,fontWeight:600,cursor:"pointer",color:NAV}}>⬇ PDF</button>
-            <button onClick={()=>setPlaybook(null)} style={{background:`linear-gradient(135deg,${NAV},${ACCENT})`,border:"none",borderRadius:8,padding:"6px 13px",fontSize:12,fontWeight:600,cursor:"pointer",color:"#fff"}}>← New</button>
+            <button onClick={()=>{ setPlaybook(null); setTemplates(null); }} style={{background:`linear-gradient(135deg,${NAV},${ACCENT})`,border:"none",borderRadius:8,padding:"6px 13px",fontSize:12,fontWeight:600,cursor:"pointer",color:"#fff"}}>← New</button>
           </div>
         </div>
-
-        {/* Tabs */}
         <div style={{display:"flex",gap:6,flexWrap:"wrap",marginBottom:12}}>
           {allTabs.map((t,i)=>{
             const isActive = tab===t.key;
             return (
-              <button key={i}
-                onClick={()=>t.key===T.TEMPLATES?loadTemplates():setTab(t.key)}
+              <button key={i} onClick={()=>t.key===T.TEMPLATES?loadTemplates():setTab(t.key)}
                 style={{background:isActive?t.color:"#fff",color:isActive?"#fff":t.color,border:`1.5px solid ${isActive?"transparent":t.color+"80"}`,borderRadius:20,padding:"6px 13px",fontSize:11,fontWeight:700,cursor:"pointer",whiteSpace:"nowrap",letterSpacing:0.2}}>
                 {t.label}
               </button>
             );
           })}
         </div>
-
-        {/* Content panel */}
         <div style={{background:"#fff",borderRadius:12,padding:"24px 28px",boxShadow:"0 2px 8px rgba(0,0,0,0.06)",minHeight:290}}>
           {renderContent()}
         </div>
-
-        {/* Prev / Next for section tabs */}
-        {typeof tab==="number" && tab<playbook.sections.length && (
+        {typeof tab==="number"&&tab<playbook.sections.length&&(
           <div style={{display:"flex",justifyContent:"space-between",marginTop:12}}>
             <button onClick={()=>setTab(t=>Math.max(0,t-1))} disabled={tab===0}
               style={{background:"#fff",border:"1.5px solid #d0dce8",borderRadius:8,padding:"7px 18px",fontSize:13,fontWeight:600,cursor:tab===0?"not-allowed":"pointer",color:"#4a6380",opacity:tab===0?0.4:1}}>
