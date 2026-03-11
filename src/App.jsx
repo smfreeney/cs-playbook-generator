@@ -130,12 +130,18 @@ function calcHealth(f) {
 }
 
 async function callClaude(prompt) {
-  const res = await fetch("https://api.anthropic.com/v1/messages", {
-    method:"POST", headers:{"Content-Type":"application/json"},
-    body: JSON.stringify({ model:"claude-sonnet-4-20250514", max_tokens:1000, messages:[{role:"user",content:prompt}] })
+  const res = await fetch('/api/generate', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      model: 'claude-sonnet-4-20250514',
+      max_tokens: 1000,
+      messages: [{ role: 'user', content: prompt }],
+    }),
   });
   const data = await res.json();
-  return data.content?.map(b=>b.text||"").join("")||"";
+  return data.content?.map(b => b.text || '').join('') || '';
+
 }
 
 function buildExportText(f, pb, health) {
