@@ -1,12 +1,6 @@
-// api/chat.js — Vercel serverless function
-// Proxies requests to Anthropic API to avoid CORS on static sites
+// api/chat.js — Vercel serverless proxy for csplaybooks.com demo
 
 export default async function handler(req, res) {
-  if (req.method !== 'POST') {
-    return res.status(405).json({ error: 'Method not allowed' });
-  }
-
-  // Allow requests from csplaybooks.com and localhost
   const origin = req.headers.origin || '';
   const allowed = [
     'https://csplaybooks.com',
@@ -25,8 +19,13 @@ export default async function handler(req, res) {
   res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS');
   res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
 
+  // Handle preflight BEFORE the method check
   if (req.method === 'OPTIONS') {
     return res.status(200).end();
+  }
+
+  if (req.method !== 'POST') {
+    return res.status(405).json({ error: 'Method not allowed' });
   }
 
   try {
