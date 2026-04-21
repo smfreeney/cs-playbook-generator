@@ -10,14 +10,15 @@ const FIELDS = [
   { key: "stage", label: "Account Stage", placeholder: "e.g. Onboarding, Adopted, At-Risk, Expansion, Renewal", type: "text" },
   { key: "renewalDate", label: "Renewal Date", placeholder: "e.g. Q3 2026 or 09/01/2026", type: "text" },
   { key: "stakeholders", label: "Key Stakeholders", placeholder: "e.g. VP Finance (champion), IT Director, CFO (exec sponsor)", type: "text" },
-  { key: "goals", label: "Customer Goals & Success Criteria", placeholder: "e.g. Reduce DSO by 20%, automate invoice delivery, cut manual posting", type: "textarea" },
+  { key: "usageMetrics", label: "Usage Metrics (optional)", placeholder: "e.g. Automation rate 51% (down from 62%), active users 6/8, approver logins 1.6/mo, CSAT 7.2, 27 support tickets", type: "textarea" },
+  { key: "goals", label: "Customer Goals & Success Criteria", placeholder: "e.g. Reduce invoice processing cost 50%, cycle time 12→5 days, improve audit readiness", type: "textarea" },
   { key: "painPoints", label: "Known Pain Points / Risks", placeholder: "e.g. Low portal adoption, integration delays, champion leaving", type: "textarea" },
   { key: "notes", label: "Additional Context (optional)", placeholder: "e.g. Came from competitor, price sensitive, exec relationship with CEO", type: "textarea" },
 ];
 
-const REQUIRED = ["company","industry","tier","stage","renewalDate","stakeholders","goals"];
-const ICONS = ["🚀","❤️","📊","🚨","📈","🎯","📋"];
-const EMPTY_FORM = { company:"",industry:"",tier:"",arr:"",stage:"",renewalDate:"",stakeholders:"",goals:"",painPoints:"",notes:"" };
+const REQUIRED = ["company", "industry", "tier", "stage", "renewalDate", "stakeholders", "goals"];
+const ICONS = ["🚀", "❤️", "📊", "🚨", "📈", "🎯", "📋"];
+const EMPTY_FORM = { company: "", industry: "", tier: "", arr: "", stage: "", renewalDate: "", stakeholders: "", usageMetrics: "", goals: "", painPoints: "", notes: "" };
 
 function getTodayString() {
   const now = new Date();
@@ -35,11 +36,12 @@ ACCOUNT:
 Company: ${f.company} | Industry: ${f.industry} | Tier: ${f.tier} | ARR: ${f.arr}
 Stage: ${f.stage} | Renewal: ${f.renewalDate}
 Stakeholders: ${f.stakeholders}
+${f.usageMetrics ? `Usage Metrics: ${f.usageMetrics}` : ""}
 Goals: ${f.goals}
 Pain Points: ${f.painPoints}
 ${f.notes ? `Context: ${f.notes}` : ""}
 
-Generate all 7 sections with 3-5 specific bullets each. Flag account-specific risks.
+Generate all 7 sections with 3-5 specific bullets each. Use the usage metrics to make recommendations specific and data-driven.
 When referencing dates or quarters, always calculate relative to today (${today}).
 
 ## 1. Onboarding & Kickoff
@@ -54,13 +56,14 @@ When referencing dates or quarters, always calculate relative to today (${today}
 
 function buildTemplatesPrompt(f, sections) {
   const today = getTodayString();
-  const ctx = sections.slice(0,3).map(s => s.title+": "+s.content.slice(0,2).join(" ")).join(" | ");
+  const ctx = sections.slice(0, 3).map(s => s.title + ": " + s.content.slice(0, 2).join(" ")).join(" | ");
   return `Generate 4 email templates for this CS account. Respond ONLY with valid JSON, no markdown, no preamble.
 
 TODAY'S DATE: ${today}
 All date references must be based on this date.
 
 Account: ${f.company} | ${f.industry} | ${f.tier} | Stage: ${f.stage} | Renewal: ${f.renewalDate}
+${f.usageMetrics ? `Usage Metrics: ${f.usageMetrics}` : ""}
 Goals: ${f.goals}
 Pain Points: ${f.painPoints}
 Context: ${ctx}
@@ -77,7 +80,7 @@ function parsePlaybook(text) {
   for (const line of lines) {
     if (/^##\s/.test(line)) {
       if (cur) sections.push(cur);
-      const title = line.replace(/^##\s*/,"").trim();
+      const title = line.replace(/^##\s*/, "").trim();
       if (/CSM Priority/i.test(title)) { cur = null; inPriority = true; }
       else { cur = { title, content: [] }; inPriority = false; }
     } else if (inPriority && line.trim()) priority.push(line.trim());
@@ -87,10 +90,44 @@ function parsePlaybook(text) {
   return { sections, priority };
 }
 
+// ── Parse usage metrics to extract numeric signals ────────────────────────────
+function parseUsageMetrics(raw) {
+  if (!raw) return { automationRate: null, userRetention: null, csatScore: null, ticketCount: null, approverLogins: null };
+  const txt = raw.toLowerCase();
+
+  // Automation rate — look for patterns like "51%" or "automation rate 51"
+  let automationRate = null;
+  const automMatch = txt.match(/automation[^%\d]*(\d{1,3})%/) || txt.match(/touchless[^%\d]*(\d{1,3})%/) || txt.match(/(\d{1,3})%[^%]*automation/) || txt.match(/(\d{1,3})%[^%]*touchless/);
+  if (automMatch) automationRate = parseInt(automMatch[1]);
+
+  // Active users — look for "active users 6/8" or "6 of 8 users" or "users 6"
+  let userRetention = null;
+  const userMatch = txt.match(/active users\s*(\d+)\s*\/\s*(\d+)/) || txt.match(/(\d+)\s*\/\s*(\d+)\s*users/) || txt.match(/(\d+)\s*of\s*(\d+)\s*users/);
+  if (userMatch) userRetention = parseInt(userMatch[1]) / parseInt(userMatch[2]);
+
+  // CSAT — look for "csat 7.2" or "satisfaction 7.2"
+  let csatScore = null;
+  const csatMatch = txt.match(/csat[^.\d]*(\d+\.?\d*)/) || txt.match(/satisfaction[^.\d]*(\d+\.?\d*)/);
+  if (csatMatch) csatScore = parseFloat(csatMatch[1]);
+
+  // Support tickets — look for "27 tickets" or "27 support tickets"
+  let ticketCount = null;
+  const ticketMatch = txt.match(/(\d+)\s*(?:support\s*)?tickets/) || txt.match(/tickets[^.\d]*(\d+)/);
+  if (ticketMatch) ticketCount = parseInt(ticketMatch[1]);
+
+  // Approver logins — look for "1.6/mo" or "logins 1.6"
+  let approverLogins = null;
+  const loginMatch = txt.match(/(?:approver\s*)?logins?[^.\d]*(\d+\.?\d*)\s*\/\s*mo/) || txt.match(/(\d+\.?\d*)\s*\/mo[^%]*login/) || txt.match(/login[^.\d]*(\d+\.?\d*)/);
+  if (loginMatch) approverLogins = parseFloat(loginMatch[1]);
+
+  return { automationRate, userRetention, csatScore, ticketCount, approverLogins };
+}
+
 function calcHealth(f) {
   let score = 0, bd = [];
   const sn = f.stage.toLowerCase();
-  const rt = (f.painPoints + " " + f.notes + " " + f.stage).toLowerCase();
+  const rt = (f.painPoints + " " + f.notes + " " + f.stage + " " + f.usageMetrics).toLowerCase();
+  const metrics = parseUsageMetrics(f.usageMetrics);
 
   // ── 1. Account Stage (max 28) ─────────────────────────────────────────────
   let ss = 14;
@@ -101,17 +138,59 @@ function calcHealth(f) {
   score += ss;
   bd.push({ label: "Account Stage", score: ss, max: 28, note: f.stage });
 
-  // ── 2. Risk Signals (max 25) — more sensitive keyword list ───────────────
-  const rw = [
-    "churn","cancel","unhappy","leaving","delayed","low adoption","no adoption",
-    "integration issue","escalat","dissatisf","not using","behind","churning",
-    "declining","dropped","bypass","disengag","abandon","not logging","inactive",
-    "missed","overdue","manual workaround","reverting","regression"
-  ];
-  const hits = rw.filter(w => rt.includes(w)).length;
-  const rs = Math.max(0, 25 - hits * 4);
-  score += rs;
-  bd.push({ label: "Risk Signals", score: rs, max: 25, note: hits === 0 ? "No major flags detected" : `${hits} risk signal(s) detected` });
+  // ── 2. Usage Metrics (max 25) — replaces/supplements risk keyword scan ────
+  // When metrics are provided, score them directly. Fall back to keyword scan if not.
+  let usageScore = 0;
+  let usageNote = "";
+
+  if (metrics.automationRate !== null || metrics.userRetention !== null || metrics.csatScore !== null) {
+    let pts = 0, signals = [];
+
+    // Automation rate: <50% = 0pts, 50-59% = 3, 60-69% = 6, 70-79% = 9, 80%+ = 12
+    if (metrics.automationRate !== null) {
+      const ap = metrics.automationRate >= 80 ? 12 : metrics.automationRate >= 70 ? 9 : metrics.automationRate >= 60 ? 6 : metrics.automationRate >= 50 ? 3 : 0;
+      pts += ap;
+      signals.push(`${metrics.automationRate}% automation`);
+    } else { pts += 6; } // neutral if not provided
+
+    // User retention: <50% = 0pts, 50-74% = 2, 75%+ = 5
+    if (metrics.userRetention !== null) {
+      const up = metrics.userRetention >= 0.75 ? 5 : metrics.userRetention >= 0.5 ? 2 : 0;
+      pts += up;
+      signals.push(`${Math.round(metrics.userRetention * 100)}% user retention`);
+    } else { pts += 3; }
+
+    // CSAT: <7 = 0, 7-7.9 = 2, 8-8.9 = 4, 9+ = 5
+    if (metrics.csatScore !== null) {
+      const cp = metrics.csatScore >= 9 ? 5 : metrics.csatScore >= 8 ? 4 : metrics.csatScore >= 7 ? 2 : 0;
+      pts += cp;
+      signals.push(`CSAT ${metrics.csatScore}`);
+    } else { pts += 3; }
+
+    // Approver logins: <2/mo = 0, 2-2.9 = 1, 3+ = 3
+    if (metrics.approverLogins !== null) {
+      const lp = metrics.approverLogins >= 3 ? 3 : metrics.approverLogins >= 2 ? 1 : 0;
+      pts += lp;
+      signals.push(`${metrics.approverLogins} logins/mo`);
+    }
+
+    usageScore = Math.min(25, pts);
+    usageNote = signals.length > 0 ? signals.join(", ") : "Metrics provided";
+  } else {
+    // Fallback: keyword scan of pain points and notes
+    const rw = [
+      "churn", "cancel", "unhappy", "leaving", "delayed", "low adoption", "no adoption",
+      "integration issue", "escalat", "dissatisf", "not using", "behind", "churning",
+      "declining", "dropped", "bypass", "disengag", "abandon", "not logging", "inactive",
+      "missed", "overdue", "manual workaround", "reverting", "regression"
+    ];
+    const hits = rw.filter(w => rt.includes(w)).length;
+    usageScore = Math.max(0, 25 - hits * 4);
+    usageNote = hits === 0 ? "No major flags detected" : `${hits} risk signal(s) in notes`;
+  }
+
+  score += usageScore;
+  bd.push({ label: "Usage & Adoption", score: usageScore, max: 25, note: usageNote });
 
   // ── 3. Renewal Proximity (max 20) ────────────────────────────────────────
   let rns = 12;
@@ -143,19 +222,21 @@ function calcHealth(f) {
   score += gs;
   bd.push({ label: "Goals Clarity", score: gs, max: 12, note: f.goals.length > 100 ? "Well-defined criteria" : "Add more specificity" });
 
-  // ── Hard caps: prevent inflated scores when real risk signals exist ───────
-  // If stage is explicitly At Risk, score cannot exceed 54 (top of "Needs Attention")
-  if (sn.includes("risk") || sn.includes("at-risk") || sn.includes("at risk")) {
-    score = Math.min(score, 54);
-  }
-  // If 3+ risk signals detected, cannot be "Healthy"
-  if (hits >= 3) {
-    score = Math.min(score, 54);
-  }
-  // If 5+ risk signals, cannot be above "At Risk" floor
-  if (hits >= 5) {
-    score = Math.min(score, 44);
-  }
+  // ── Hard caps ─────────────────────────────────────────────────────────────
+  // At-risk stage: never Healthy
+  if (sn.includes("risk") || sn.includes("at-risk") || sn.includes("at risk")) score = Math.min(score, 54);
+  // Automation rate critically low: never Healthy
+  if (metrics.automationRate !== null && metrics.automationRate < 55) score = Math.min(score, 54);
+  // CSAT below 7.5: never Healthy
+  if (metrics.csatScore !== null && metrics.csatScore < 7.5) score = Math.min(score, 54);
+  // Both automation low AND CSAT low AND user retention low: At Risk floor
+  const multipleMetricFail = [
+    metrics.automationRate !== null && metrics.automationRate < 60,
+    metrics.csatScore !== null && metrics.csatScore < 7.5,
+    metrics.userRetention !== null && metrics.userRetention < 0.75,
+    metrics.approverLogins !== null && metrics.approverLogins < 2,
+  ].filter(Boolean).length;
+  if (multipleMetricFail >= 3) score = Math.min(score, 44);
 
   const total = Math.min(100, score);
   const status = total >= 75 ? "Healthy" : total >= 55 ? "Needs Attention" : total >= 35 ? "At Risk" : "Critical";
@@ -166,7 +247,7 @@ function calcHealth(f) {
 async function callClaude(prompt) {
   const res = await fetch('/api/generate', {
     method: 'POST', headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ model: "claude-sonnet-4-20250514", max_tokens: 2000, messages: [{ role: "user", content: prompt }] })
+    body: JSON.stringify({ model: "claude-sonnet-4-20250514", max_tokens: 2500, messages: [{ role: "user", content: prompt }] })
   });
   const data = await res.json();
   return data.content?.map(b => b.text || "").join("") || "";
@@ -174,8 +255,9 @@ async function callClaude(prompt) {
 
 function buildExportText(f, pb, health) {
   let out = `CS ACCOUNT PLAYBOOK — ${f.company}\n${"=".repeat(52)}\n`;
-  out += `Industry: ${f.industry} | Tier: ${f.tier} | ARR: ${f.arr}\nStage: ${f.stage} | Renewal: ${f.renewalDate}\nStakeholders: ${f.stakeholders}\n\n`;
-  out += `HEALTH SCORE: ${health.total}/100 — ${health.status}\n${"=".repeat(52)}\n\n`;
+  out += `Industry: ${f.industry} | Tier: ${f.tier} | ARR: ${f.arr}\nStage: ${f.stage} | Renewal: ${f.renewalDate}\nStakeholders: ${f.stakeholders}\n`;
+  if (f.usageMetrics) out += `Usage Metrics: ${f.usageMetrics}\n`;
+  out += `\nHEALTH SCORE: ${health.total}/100 — ${health.status}\n${"=".repeat(52)}\n\n`;
   pb.sections.forEach(s => { out += `${s.title}\n${"-".repeat(42)}\n${s.content.join("\n")}\n\n`; });
   if (pb.priority.length) out += `CSM PRIORITY ACTIONS\n${"-".repeat(42)}\n${pb.priority.join("\n")}\n`;
   return out;
@@ -244,7 +326,6 @@ export default function App() {
     w.document.close(); setTimeout(() => w.print(), 400);
   };
 
-  // ── Form view ──
   if (!playbook) return (
     <div style={{ fontFamily: "'Segoe UI',sans-serif", minHeight: "100vh", background: "#f0f4f8" }}>
       <div style={{ background: `linear-gradient(135deg,${NAV},${ACCENT})`, color: "#fff", padding: "28px 32px 24px" }}>
@@ -274,8 +355,7 @@ export default function App() {
           <div style={{ marginTop: 22, display: "flex", justifyContent: "flex-end", alignItems: "center", gap: 12 }}>
             {!canGen && <span style={{ fontSize: 12, color: "#9aacbc" }}>* Complete required fields</span>}
             {hasAnyValue && (
-              <button onClick={clearForm}
-                style={{ background: "#fff", border: "1.5px solid #d0dce8", borderRadius: 8, padding: "12px 20px", fontSize: 14, fontWeight: 600, cursor: "pointer", color: "#6b829e" }}>
+              <button onClick={clearForm} style={{ background: "#fff", border: "1.5px solid #d0dce8", borderRadius: 8, padding: "12px 20px", fontSize: 14, fontWeight: 600, cursor: "pointer", color: "#6b829e" }}>
                 Clear Fields
               </button>
             )}
@@ -289,7 +369,6 @@ export default function App() {
     </div>
   );
 
-  // ── Playbook view ──
   const allTabs = [
     ...playbook.sections.map((s, i) => ({ key: i, label: `${ICONS[i]} ${s.title.replace(/^\d+\.\s*/, "")}`, color: NAV })),
     { key: T.PRIORITY, label: "⚡ Priority", color: "#e05c2a" },
@@ -312,7 +391,7 @@ export default function App() {
           </div>
           <div style={{ flex: 1, minWidth: 220 }}>
             <div style={{ fontSize: 15, fontWeight: 700, color: "#1e3a5f", marginBottom: 3 }}>{form.company} — Account Health</div>
-            <div style={{ fontSize: 12, color: "#6b829e", marginBottom: 14 }}>Scored on stage, risk signals, renewal timing, stakeholders, and goal definition.</div>
+            <div style={{ fontSize: 12, color: "#6b829e", marginBottom: 14 }}>Scored on stage, usage metrics, renewal timing, stakeholders, and goal definition.</div>
             {health.breakdown.map((b, i) => (
               <div key={i} style={{ marginBottom: 11 }}>
                 <div style={{ display: "flex", justifyContent: "space-between", fontSize: 12, marginBottom: 3 }}>
