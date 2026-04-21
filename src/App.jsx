@@ -19,8 +19,17 @@ const REQUIRED = ["company","industry","tier","stage","renewalDate","stakeholder
 const ICONS = ["🚀","❤️","📊","🚨","📈","🎯","📋"];
 const EMPTY_FORM = { company:"",industry:"",tier:"",arr:"",stage:"",renewalDate:"",stakeholders:"",goals:"",painPoints:"",notes:"" };
 
+function getTodayString() {
+  const now = new Date();
+  return now.toLocaleDateString("en-US", { year: "numeric", month: "long", day: "numeric" });
+}
+
 function buildPlaybookPrompt(f) {
+  const today = getTodayString();
   return `You are a senior CSM with deep expertise in payments, AR automation, and utility tech. Generate a practical, account-specific CS playbook. Be direct and actionable — no generic filler.
+
+TODAY'S DATE: ${today}
+All dates, timelines, and quarter references in your output MUST be based on this date. Do not use any other year or date assumption.
 
 ACCOUNT:
 Company: ${f.company} | Industry: ${f.industry} | Tier: ${f.tier} | ARR: ${f.arr}
@@ -31,6 +40,7 @@ Pain Points: ${f.painPoints}
 ${f.notes ? `Context: ${f.notes}` : ""}
 
 Generate all 7 sections with 3-5 specific bullets each. Flag account-specific risks.
+When referencing dates or quarters, always calculate relative to today (${today}).
 
 ## 1. Onboarding & Kickoff
 ## 2. Health Scoring & Risk Flags
@@ -43,8 +53,12 @@ Generate all 7 sections with 3-5 specific bullets each. Flag account-specific ri
 }
 
 function buildTemplatesPrompt(f, sections) {
+  const today = getTodayString();
   const ctx = sections.slice(0,3).map(s => s.title+": "+s.content.slice(0,2).join(" ")).join(" | ");
   return `Generate 4 email templates for this CS account. Respond ONLY with valid JSON, no markdown, no preamble.
+
+TODAY'S DATE: ${today}
+All date references must be based on this date.
 
 Account: ${f.company} | ${f.industry} | ${f.tier} | Stage: ${f.stage} | Renewal: ${f.renewalDate}
 Goals: ${f.goals}
@@ -80,14 +94,14 @@ function calcHealth(f) {
   if (sn.includes("adopt")||sn.includes("expan")) ss=28;
   else if (sn.includes("onboard")) ss=20;
   else if (sn.includes("renew")) ss=16;
-  else if (sn.includes("risk")) ss=6;
+  else if (sn.includes("risk")||sn.includes("at-risk")||sn.includes("at risk")) ss=6;
   score += ss;
   bd.push({ label:"Account Stage", score:ss, max:28, note:f.stage });
 
-  const rw = ["churn","cancel","unhappy","leaving","delayed","low adoption","no adoption","integration issue","escalat","dissatisf","not using","behind","churning"];
-  const rt = (f.painPoints+" "+f.notes).toLowerCase();
+  const rw = ["churn","cancel","unhappy","leaving","delayed","low adoption","no adoption","integration issue","escalat","dissatisf","not using","behind","churning","declining","dropped","bypass","disengag"];
+  const rt = (f.painPoints+" "+f.notes+" "+f.stage).toLowerCase();
   const hits = rw.filter(w=>rt.includes(w)).length;
-  const rs = Math.max(0, 25-hits*6);
+  const rs = Math.max(0, 25-hits*5);
   score += rs;
   bd.push({ label:"Risk Signals", score:rs, max:25, note:hits===0?"No major flags detected":`${hits} risk signal(s) detected` });
 
